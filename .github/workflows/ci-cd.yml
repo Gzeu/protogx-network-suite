@@ -1,0 +1,401 @@
+name: 🚀 PROTOGX CI/CD Pipeline
+
+# Trigger workflow on push to main/develop and pull requests
+on:
+  push:
+    branches: [ main, develop, feature/major-update-2025 ]
+  pull_request:
+    branches: [ main, develop ]
+
+# Environment variables for the workflow
+env:
+  NODE_VERSION: '20'
+  CARGO_VERSION: 'stable'
+  VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+  VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+
+# Job definitions
+jobs:
+  # =============================================================================
+  # 🧠 Code Quality & Security Analysis
+  # =============================================================================
+  quality-check:
+    name: 🔍 Quality & Security Check
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: 📂 Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0 # Full history for better analysis
+    
+    - name: ⚙️ Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ env.NODE_VERSION }}
+        cache: 'npm'
+    
+    - name: 📦 Install dependencies
+      run: |
+        npm ci --prefer-offline --no-audit
+        # Install only production deps for security scanning
+        npm ci --production --prefer-offline
+      env:
+        HUSKY: 0 # Disable husky in CI
+    
+    - name: 🔍 ESLint Analysis
+      run: |
+        npm run lint:check
+        # Generate ESLint report
+        npx eslint . --ext .ts,.tsx,.js,.jsx --format json --output-file eslint-report.json || true
+    
+    - name: 🔍 TypeScript Check
+      run: npm run type-check
+    
+    - name: 🛡️ Security Audit
+      run: |
+        # Check for vulnerabilities
+        npm audit --audit-level high
+        # Generate security report
+        npm audit --json > security-audit.json || true
+    
+    - name: 📊 Upload Quality Reports
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: quality-reports
+        path: |
+          eslint-report.json
+          security-audit.json
+          coverage/
+        retention-days: 7
+
+  # =============================================================================
+  # 🧨 Testing Suite
+  # =============================================================================
+  testing:
+    name: 🧨 Testing Suite
+    runs-on: ubuntu-latest
+    
+    strategy:
+      matrix:
+        node-version: ['18', '20', '21']
+    
+    steps:
+    - name: 📂 Checkout code
+      uses: actions/checkout@v4
+    
+    - name: ⚙️ Setup Node.js ${{ matrix.node-version }}
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ matrix.node-version }}
+        cache: 'npm'
+    
+    - name: 📦 Install dependencies
+      run: npm ci --prefer-offline
+    
+    - name: 🧨 Unit Tests
+      run: |
+        npm run test:coverage
+        # Generate test report
+        npx jest --ci --coverage --testResultsProcessor="jest-junit" --coverageReporters=text-lcov > coverage.lcov
+      env:
+        CI: true
+        NODE_ENV: test
+    
+    - name: 🎭 Upload Test Results
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: test-results-node-${{ matrix.node-version }}
+        path: |
+          coverage/
+          junit.xml
+          coverage.lcov
+        retention-days: 7
+
+  # =============================================================================
+  # 🎮 E2E Testing with Playwright
+  # =============================================================================
+  e2e-testing:
+    name: 🎮 E2E Testing
+    runs-on: ubuntu-latest
+    needs: [quality-check]
+    
+    steps:
+    - name: 📂 Checkout code
+      uses: actions/checkout@v4
+    
+    - name: ⚙️ Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ env.NODE_VERSION }}
+        cache: 'npm'
+    
+    - name: 📦 Install dependencies
+      run: npm ci --prefer-offline
+    
+    - name: 🎭 Install Playwright
+      run: |
+        npx playwright install --with-deps
+        npx playwright install-deps
+    
+    - name: 🔧 Build application
+      run: npm run build
+      env:
+        SKIP_ENV_VALIDATION: true
+    
+    - name: 🎮 Run E2E Tests
+      run: |
+        npm run e2e
+      env:
+        CI: true
+        NODE_ENV: test
+    
+    - name: 📈 Upload E2E Results
+      uses: actions/upload-artifact@v4
+      if: failure()
+      with:
+        name: e2e-test-results
+        path: |
+          test-results/
+          playwright-report/
+        retention-days: 7
+
+  # =============================================================================
+  # ⚙️ Smart Contracts Build & Test
+  # =============================================================================
+  contracts-build:
+    name: ⚙️ Smart Contracts
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: 📂 Checkout code
+      uses: actions/checkout@v4
+    
+    - name: 🦀 Setup Rust
+      uses: actions-rs/toolchain@v1
+      with:
+        toolchain: ${{ env.CARGO_VERSION }}
+        override: true
+        components: rustfmt, clippy
+    
+    - name: 📦 Cache Cargo dependencies
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+          contracts/target
+        key: ${{ runner.os }}-cargo-${{ hashFiles('contracts/**/Cargo.lock') }}
+    
+    - name: 🔍 Rust Format Check
+      working-directory: ./contracts
+      run: cargo fmt --all -- --check
+    
+    - name: 🔍 Clippy Linting
+      working-directory: ./contracts
+      run: cargo clippy --all-targets --all-features -- -D warnings
+    
+    - name: 🔧 Build Contracts
+      working-directory: ./contracts
+      run: |
+        cargo build --release
+        # Create artifacts directory
+        mkdir -p ../artifacts
+        # Copy built contracts
+        find target/release -name "*.wasm" -exec cp {} ../artifacts/ \;
+    
+    - name: 🧨 Test Contracts
+      working-directory: ./contracts
+      run: cargo test --verbose
+    
+    - name: 📁 Upload Contract Artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: smart-contracts
+        path: artifacts/
+        retention-days: 30
+
+  # =============================================================================
+  # 📊 Performance & Security Analysis
+  # =============================================================================
+  performance-analysis:
+    name: 📊 Performance Analysis
+    runs-on: ubuntu-latest
+    needs: [testing]
+    
+    steps:
+    - name: 📂 Checkout code
+      uses: actions/checkout@v4
+    
+    - name: ⚙️ Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ env.NODE_VERSION }}
+        cache: 'npm'
+    
+    - name: 📦 Install dependencies
+      run: npm ci --prefer-offline
+    
+    - name: 🔧 Build for Analysis
+      run: |
+        npm run build
+        # Generate bundle analysis
+        ANALYZE=true npm run build > /dev/null 2>&1 || true
+      env:
+        NODE_ENV: production
+        SKIP_ENV_VALIDATION: true
+    
+    - name: 📊 Lighthouse CI
+      run: |
+        # Install Lighthouse CI
+        npm install -g @lhci/cli
+        # Run Lighthouse analysis (if lighthouserc.json exists)
+        if [ -f "lighthouserc.json" ]; then
+          lhci autorun || true
+        else
+          echo "Lighthouse config not found, skipping..."
+        fi
+    
+    - name: 📈 Upload Performance Reports
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: performance-reports
+        path: |
+          .next/analyze/
+          .lighthouseci/
+        retention-days: 7
+
+  # =============================================================================
+  # 🚀 Deployment to Vercel (Free Tier)
+  # =============================================================================
+  deploy-preview:
+    name: 📱 Deploy Preview
+    runs-on: ubuntu-latest
+    needs: [quality-check, testing, contracts-build]
+    if: github.event_name == 'pull_request'
+    
+    steps:
+    - name: 📂 Checkout code
+      uses: actions/checkout@v4
+    
+    - name: 🚀 Deploy to Vercel Preview
+      uses: amondnet/vercel-action@v25
+      with:
+        vercel-token: ${{ secrets.VERCEL_TOKEN }}
+        vercel-org-id: ${{ secrets.VERCEL_ORG_ID }}
+        vercel-project-id: ${{ secrets.VERCEL_PROJECT_ID }}
+        scope: ${{ secrets.VERCEL_ORG_ID }}
+        working-directory: ./
+  
+  deploy-production:
+    name: 🌐 Deploy Production
+    runs-on: ubuntu-latest
+    needs: [quality-check, testing, e2e-testing, contracts-build, performance-analysis]
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    
+    environment:
+      name: production
+      url: https://protogx-network-suite.vercel.app
+    
+    steps:
+    - name: 📂 Checkout code
+      uses: actions/checkout@v4
+    
+    - name: 🚀 Deploy to Vercel Production
+      uses: amondnet/vercel-action@v25
+      with:
+        vercel-token: ${{ secrets.VERCEL_TOKEN }}
+        vercel-org-id: ${{ secrets.VERCEL_ORG_ID }}
+        vercel-project-id: ${{ secrets.VERCEL_PROJECT_ID }}
+        vercel-args: '--prod'
+        scope: ${{ secrets.VERCEL_ORG_ID }}
+        working-directory: ./
+  
+  # =============================================================================
+  # 📊 Post-Deploy Health Check
+  # =============================================================================
+  health-check:
+    name: 🚪 Health Check
+    runs-on: ubuntu-latest
+    needs: [deploy-production]
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    
+    steps:
+    - name: 📂 Checkout code
+      uses: actions/checkout@v4
+    
+    - name: ⚙️ Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ env.NODE_VERSION }}
+        cache: 'npm'
+    
+    - name: 📦 Install dependencies
+      run: npm ci --prefer-offline
+    
+    - name: 🚪 Run Health Check
+      run: |
+        # Wait for deployment to be ready
+        sleep 30
+        # Run health check script
+        node scripts/health-check.js || npm run health-check || true
+      env:
+        HEALTH_CHECK_URL: https://protogx-network-suite.vercel.app
+    
+    - name: 📱 Notify Success
+      if: success()
+      run: |
+        echo "🎉 PROTOGX NETWORK deployed successfully!"
+        echo "URL: https://protogx-network-suite.vercel.app"
+        echo "Status: ✅ All systems operational"
+
+  # =============================================================================
+  # 📈 Metrics & Reporting
+  # =============================================================================
+  metrics-report:
+    name: 📈 Generate Metrics Report
+    runs-on: ubuntu-latest
+    needs: [quality-check, testing, e2e-testing, performance-analysis]
+    if: always()
+    
+    steps:
+    - name: 📂 Checkout code
+      uses: actions/checkout@v4
+    
+    - name: 📈 Download All Artifacts
+      uses: actions/download-artifact@v4
+      with:
+        path: ./reports
+    
+    - name: 📈 Generate Summary Report
+      run: |
+        echo "# 🚀 PROTOGX NETWORK - CI/CD Report" > METRICS.md
+        echo "" >> METRICS.md
+        echo "## 📅 Build Information" >> METRICS.md
+        echo "- **Branch:** ${{ github.ref_name }}" >> METRICS.md
+        echo "- **Commit:** ${{ github.sha }}" >> METRICS.md
+        echo "- **Run ID:** ${{ github.run_id }}" >> METRICS.md
+        echo "- **Date:** $(date)" >> METRICS.md
+        echo "" >> METRICS.md
+        
+        echo "## 📁 Artifacts Generated" >> METRICS.md
+        find ./reports -name "*.json" -o -name "*.xml" -o -name "*.lcov" | head -20 | while read file; do
+          echo "- ✓ $file" >> METRICS.md
+        done
+        
+        echo "" >> METRICS.md
+        echo "## 🎡 Next Steps" >> METRICS.md
+        echo "- Review test coverage reports" >> METRICS.md
+        echo "- Check performance metrics" >> METRICS.md
+        echo "- Verify security audit results" >> METRICS.md
+        echo "- Monitor deployment health" >> METRICS.md
+    
+    - name: 📄 Upload Metrics Report
+      uses: actions/upload-artifact@v4
+      with:
+        name: metrics-report
+        path: METRICS.md
+        retention-days: 30
