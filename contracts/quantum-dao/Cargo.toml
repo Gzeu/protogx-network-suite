@@ -1,0 +1,23 @@
+[package]
+name = "quantum-dao"
+version = "0.1.0"
+edition = "2021"
+authors = ["George Pricop <pricopgeorge@gmail.com>"]
+description = "Quantum DAO Simulator - First game in PROTOGX Network Suite"
+license = "MIT"
+
+[lib]
+name = "quantum_dao"
+crate-type = ["cdylib"]
+path = "src/lib.rs"
+
+[[bin]]
+name = "quantum-dao-meta"
+path = "meta/src/main.rs"
+
+[dependencies.multiversx-sc]
+version = "0.47.0"
+features = ["derive"]
+
+[dev-dependencies.multiversx-sc-scenario]
+version = "0.47.0"
