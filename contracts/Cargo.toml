@@ -1,0 +1,21 @@
+[workspace]
+members = [
+    "quantum-dao",
+    "crypto-arbitrage", 
+    "syndicate-wars",
+    "nft-rewards",
+    "leaderboard"
+]
+
+[workspace.dependencies]
+multiversx-sc = "0.47.0"
+multiversx-sc-derive = "0.47.0"
+multiversx-sc-meta = "0.47.0"
+multiversx-sc-scenario = "0.47.0"
+
+[profile.release]
+codegen-units = 1
+opt-level = "z"
+lto = true
+panic = "abort"
+overflow-checks = false
