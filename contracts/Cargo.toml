@@ -1,11 +1,13 @@
 [workspace]
 members = [
-    "quantum-dao",
-    "crypto-arbitrage", 
-    "syndicate-wars",
-    "nft-rewards",
-    "leaderboard"
+    "quantum-dao"
 ]
+
+# TODO: Add missing contracts:
+# "crypto-arbitrage", 
+# "syndicate-wars",   
+# "nft-rewards",      
+# "leaderboard"
 
 [workspace.dependencies]
 multiversx-sc = "0.47.0"
